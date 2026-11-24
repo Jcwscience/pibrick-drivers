@@ -586,22 +586,38 @@ full-charge synchronization.
 
 ### Examples
 
+Keep each `config.txt` entry below the firmware's
+[98-character limit](https://www.raspberrypi.com/documentation/computers/config_txt.html#file-format).
+Load `pibrick` once, then put its parameters on separate `dtparam` lines
+immediately afterwards, before loading another overlay. Long combined
+lines are truncated and can prevent the battery driver from starting.
+
 Conventional battery rated at 3.70 V nominal and 4.20 V maximum charging:
 
 ```ini
-dtoverlay=pibrick,battery_capacity=5000,battery_nominal_voltage_uv=3700000,battery_max_voltage_uv=4200000
+dtoverlay=pibrick
+dtparam=battery_capacity=5000
+dtparam=battery_nominal_voltage_uv=3700000
+dtparam=battery_max_voltage_uv=4200000
 ```
 
 Battery rated at 3.85 V nominal and 4.40 V maximum charging:
 
 ```ini
-dtoverlay=pibrick,battery_capacity=5000,battery_nominal_voltage_uv=3850000,battery_max_voltage_uv=4400000
+dtoverlay=pibrick
+dtparam=battery_capacity=5000
+dtparam=battery_nominal_voltage_uv=3850000
+dtparam=battery_max_voltage_uv=4400000
 ```
 
 You can also configure the charging current:
 
 ```ini
-dtoverlay=pibrick,battery_capacity=5000,charge_current_ma=4000,battery_nominal_voltage_uv=3850000,battery_max_voltage_uv=4400000
+dtoverlay=pibrick
+dtparam=battery_capacity=5000
+dtparam=charge_current_ma=4000
+dtparam=battery_nominal_voltage_uv=3850000
+dtparam=battery_max_voltage_uv=4400000
 ```
 
 The equivalent generic-default configuration is:
@@ -1124,7 +1140,10 @@ To customize the battery, specify the values in `config.txt`. For example,
 a 5000 mAh cell rated at 3.85 V nominal and 4.40 V maximum charging:
 
 ```ini
-dtoverlay=pibrick,battery_capacity=5000,battery_nominal_voltage_uv=3850000,battery_max_voltage_uv=4400000
+dtoverlay=pibrick
+dtparam=battery_capacity=5000
+dtparam=battery_nominal_voltage_uv=3850000
+dtparam=battery_max_voltage_uv=4400000
 ```
 
 ---
@@ -1224,10 +1243,11 @@ charge_current_ma
 Examples:
 
 ```ini
-dtoverlay=pibrick,battery_capacity=5000
-dtoverlay=pibrick,battery_nominal_voltage_uv=3850000
-dtoverlay=pibrick,battery_max_voltage_uv=4400000
-dtoverlay=pibrick,battery_capacity=5000,charge_current_ma=4000,battery_nominal_voltage_uv=3850000,battery_max_voltage_uv=4400000
+dtoverlay=pibrick
+dtparam=battery_capacity=5000
+dtparam=charge_current_ma=4000
+dtparam=battery_nominal_voltage_uv=3850000
+dtparam=battery_max_voltage_uv=4400000
 ```
 
 Use `battery_nominal_voltage_uv` for the battery's nominal voltage and

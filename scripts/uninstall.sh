@@ -145,19 +145,32 @@ show_status()
 
 remove_config()
 {
-    local config="/boot/firmware/config.txt"
+    local config="${1:-/boot/firmware/config.txt}"
 
     if [[ ! -f "${config}" ]]; then
         info "config.txt not found, skipping overlay configuration removal"
         return
     fi
 
-    if grep -qE '^[[:space:]]*dtoverlay=pibrick([[:space:]]|$)' "${config}"; then
+    if grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*pibrick([,[:space:]]|$)' "${config}"; then
         info "Removing piBrick device-tree overlay from config.txt"
 
-        sed -i \
-            '/^[[:space:]]*dtoverlay=pibrick[[:space:]]*$/d' \
-            "${config}"
+        local normalized
+        normalized="$(mktemp)"
+        if ! awk '
+            /^[[:space:]]*dtoverlay[[:space:]]*=/ {
+                pibrick = ($0 ~ /^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*pibrick([,[:space:]]|$)/)
+                if (pibrick)
+                    next
+            }
+            pibrick && /^[[:space:]]*dtparam[[:space:]]*=[[:space:]]*(battery_capacity|battery_nominal_voltage_uv|battery_max_voltage_uv|charge_current_ma)=/ { next }
+            { print }
+        ' "$config" > "$normalized"; then
+            rm -f "$normalized"
+            die "Could not remove piBrick overlay configuration"
+        fi
+        cat "$normalized" > "$config"
+        rm -f "$normalized"
 
         # Remove the comment added by install_config(), but only
         # when it is immediately associated with the piBrick overlay.

@@ -71,14 +71,24 @@ dtoverlay=pibrick
 #   Configured maximum charging current in mA.
 #   Default: 4000 mA
 #
+# Use one piBrick overlay entry. Replace the entry above with one
+# example block; keep its dtparam lines immediately after dtoverlay.
+# Firmware truncates config entries longer than 98 characters.
+#
 # Example: conventional 3.7 V nominal, 4.2 V maximum battery:
 #
-# dtoverlay=pibrick,battery_capacity=5000,battery_nominal_voltage_uv=3700000,battery_max_voltage_uv=4200000
+# dtoverlay=pibrick
+# dtparam=battery_capacity=5000
+# dtparam=battery_nominal_voltage_uv=3700000
+# dtparam=battery_max_voltage_uv=4200000
 #
 # Example: 3.85 V nominal, 4.40 V maximum battery (only if specified by its
 # manufacturer):
 #
-# dtoverlay=pibrick,battery_capacity=5000,battery_nominal_voltage_uv=3850000,battery_max_voltage_uv=4400000
+# dtoverlay=pibrick
+# dtparam=battery_capacity=5000
+# dtparam=battery_nominal_voltage_uv=3850000
+# dtparam=battery_max_voltage_uv=4400000
 #
 # IMPORTANT:
 #   - Set nominal voltage and maximum charging voltage independently.
@@ -242,15 +252,25 @@ dtoverlay=pibrick
 #
 # Example: conventional 3.7 V nominal / 4.2 V maximum battery:
 #
-#     dtoverlay=pibrick,battery_capacity=5000,battery_nominal_voltage_uv=3700000,battery_max_voltage_uv=4200000
+#     dtoverlay=pibrick
+#     dtparam=battery_capacity=5000
+#     dtparam=battery_nominal_voltage_uv=3700000
+#     dtparam=battery_max_voltage_uv=4200000
 #
 # Example: 3.85 V nominal / 4.40 V maximum battery:
 # Only use 4.40 V when explicitly specified by the battery manufacturer.
 #
-#     dtoverlay=pibrick,battery_capacity=5000,battery_nominal_voltage_uv=3850000,battery_max_voltage_uv=4400000
+#     dtoverlay=pibrick
+#     dtparam=battery_capacity=5000
+#     dtparam=battery_nominal_voltage_uv=3850000
+#     dtparam=battery_max_voltage_uv=4400000
 #
 # Charging current can also be specified, for example:
 #
-#     dtoverlay=pibrick,battery_capacity=5000,charge_current_ma=4000,battery_nominal_voltage_uv=3850000,battery_max_voltage_uv=4400000
+#     dtoverlay=pibrick
+#     dtparam=battery_capacity=5000
+#     dtparam=charge_current_ma=4000
+#     dtparam=battery_nominal_voltage_uv=3850000
+#     dtparam=battery_max_voltage_uv=4400000
 #
 # ============================================================================ 

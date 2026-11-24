@@ -366,9 +366,29 @@ show_status()
 
 install_config()
 {
-    local config="/boot/firmware/config.txt"
+    local config="${1:-/boot/firmware/config.txt}"
+    local normalized
 
-    if ! grep -qE '^[[:space:]]*dtoverlay=pibrick([[:space:]]|$)' "$config"; then
+    # Firmware truncates config.txt entries after 98 characters. Keep overlay
+    # parameters on separate lines, even when preserving an existing setup.
+    normalized="$(mktemp)"
+    if ! awk '
+        /^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*pibrick,/ {
+            count = split($0, fields, ",")
+            print fields[1]
+            for (i = 2; i <= count; i++)
+                print "dtparam=" fields[i]
+            next
+        }
+        { print }
+    ' "$config" > "$normalized"; then
+        rm -f "$normalized"
+        die "Could not normalize piBrick overlay configuration"
+    fi
+    cat "$normalized" > "$config"
+    rm -f "$normalized"
+
+    if ! grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*pibrick([,[:space:]]|$)' "$config"; then
         info "Enabling piBrick device-tree overlay"
         printf '\n# piBrick CM5 drivers\ndtoverlay=pibrick\n' >> "$config"
     else
