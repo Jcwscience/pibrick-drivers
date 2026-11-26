@@ -469,6 +469,9 @@ main()
 
     # The DTBO is installed separately because it is not a kernel module.
     install_dtbo
+    install -D -m 0644 \
+        "${ROOT_DIR}/accel/61-pibrick-accelerometer.rules" \
+        /etc/udev/rules.d/61-pibrick-accelerometer.rules
     install_config
 
     # Userspace applications are built independently.

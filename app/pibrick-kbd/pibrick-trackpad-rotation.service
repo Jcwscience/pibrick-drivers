@@ -1,0 +1,12 @@
+[Unit]
+Description=Match the PiBrick trackpad to the Plasma display rotation
+PartOf=plasma-workspace-wayland.target
+After=plasma-kwin_wayland.service
+
+[Service]
+ExecStart=/usr/local/bin/pibrick-trackpad-follow-output DSI-2
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=plasma-workspace-wayland.target

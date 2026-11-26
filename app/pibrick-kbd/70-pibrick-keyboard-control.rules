@@ -1,0 +1,2 @@
+ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:F10C:0001.*", IMPORT{builtin}="usb_id"
+ACTION!="remove", SUBSYSTEM=="hidraw", ENV{ID_USB_VENDOR_ID}=="f10c", ENV{ID_USB_MODEL_ID}=="0001", ENV{ID_USB_INTERFACE_NUM}=="01", TAG+="uaccess", SYMLINK+="pibrick-keyboard-control"

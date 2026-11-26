@@ -1,0 +1,2 @@
+# Align the rear-mounted MMA8451 with the front of the display.
+SUBSYSTEM=="iio", ATTR{name}=="pibrick-mma8451", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, 1, 0; 0, 0, -1"

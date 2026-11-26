@@ -227,6 +227,7 @@ main()
     remove_userspace
     remove_dkms
     remove_dtbo
+    rm -f /etc/udev/rules.d/61-pibrick-accelerometer.rules
     remove_config
 
     restore_pibrick_splash

@@ -181,13 +181,11 @@
 				pibrick,battery-nominal-voltage-uv = <3700000>;
 			};
 
-/* Enable accelerometer
 			pibrick_accel: accelerometer@1c {
 				compatible = "pibrick,mma8451";
 				reg = <0x1c>;
 				status = "okay";
 			};
-*/
 		};
 	};
 

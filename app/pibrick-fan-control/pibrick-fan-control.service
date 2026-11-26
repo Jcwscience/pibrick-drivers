@@ -1,0 +1,17 @@
+[Unit]
+Description=piBrick temperature-based fan control
+After=systemd-modules-load.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/pibrick-fan-control
+ExecStart=/usr/bin/python3 /usr/local/sbin/pibrick-fan-control
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -722,6 +722,10 @@ touchscreen-inverted-y;
 
 provide the required 180-degree coordinate transformation.
 
+Under Plasma Wayland, bind the touchscreen to the internal DSI output in
+System Settings. The driver applies the hardware mounting correction and
+KWin maps the resulting coordinates through the current output rotation.
+
 ---
 
 # Button Service
@@ -1041,7 +1045,7 @@ The keyboard trackpad supports four rotation states:
 Read the current rotation:
 
 ```bash
-./pibrick-kbd.sh rotation
+./pibrick-kbd.sh rotate
 ```
 
 or:
@@ -1053,10 +1057,10 @@ or:
 Set the rotation:
 
 ```bash
-./pibrick-kbd.sh rotation 0
-./pibrick-kbd.sh rotation 1
-./pibrick-kbd.sh rotation 2
-./pibrick-kbd.sh rotation 3
+./pibrick-kbd.sh rotate 0
+./pibrick-kbd.sh rotate 1
+./pibrick-kbd.sh rotate 2
+./pibrick-kbd.sh rotate 3
 ```
 
 The long command name is also accepted:
@@ -1066,6 +1070,28 @@ The long command name is also accepted:
 ```
 
 This functionality is useful when the display orientation changes and the trackpad coordinate orientation needs to follow it.
+
+### Plasma Wayland auto-rotation
+
+The piBrick overlay enables the MMA8451 at I²C1 address `0x1c`. The
+`pibrick-mma8451` module exposes it through IIO, and the driver's installer
+adds the udev mount matrix for the rear-mounted sensor. With
+`iio-sensor-proxy` installed, `monitor-sensor` reports orientation changes
+from the local session. Enable automatic orientation for the internal
+panel in Plasma Display Configuration. If the distribution denies
+KWin's sensor claim because KWin runs under the systemd user manager,
+allow `net.hadess.SensorProxy.claim-sensor` for that desktop account's user
+manager in polkit.
+
+The optional `pibrick-trackpad-rotation.service` user service reads the
+actual Wayland display rotation and applies it with `pibrick-kbd`. It
+uses `python3-pywayland` and `python3-pyudev`. Install
+`70-pibrick-keyboard-control.rules` in `/etc/udev/rules.d/` and
+`pibrick-trackpad-follow-output` as an executable in `/usr/local/bin/`.
+Install the unit in `~/.config/systemd/user/` and enable it with
+`systemctl --user enable --now pibrick-trackpad-rotation.service`.
+Set the connector in the unit's `ExecStart` to the internal panel shown
+by `kscreen-doctor -o` if it differs from `DSI-2`.
 
 ---
 

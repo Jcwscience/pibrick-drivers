@@ -1,0 +1,101 @@
+#!/usr/bin/python3
+
+import os
+import select
+import subprocess
+import sys
+
+import pyudev
+from pywayland.client import Display
+from pywayland.protocol.wayland import WlOutput
+
+
+KEYBOARD = "/dev/pibrick-keyboard-control"
+
+
+def follow_output(connector):
+    transforms = {}
+    desired = None
+    applied = None
+    reported_failure = False
+
+    def output_done(output):
+        nonlocal desired
+        name, transform = transforms[output]
+        if name == connector:
+            # The firmware negates X after rotating its raw deltas. This
+            # reverses the quarter-turn in the resulting mouse coordinates.
+            desired = (-transform) % 4 if transform in range(4) else None
+
+    outputs = {}
+
+    def output_added(registry, name, interface, version):
+        if interface != "wl_output" or version < 4:
+            return
+
+        def output_named(output, name):
+            transforms[output][0] = name
+
+        def geometry_changed(output, x, y, width, height, subpixel, make, model, transform):
+            transforms[output][1] = transform
+
+        output = registry.bind(name, WlOutput, 4)
+        outputs[name] = output
+        transforms[output] = [None, None]
+        output.dispatcher["name"] = output_named
+        output.dispatcher["geometry"] = geometry_changed
+        output.dispatcher["done"] = output_done
+
+    def output_removed(registry, name):
+        nonlocal desired
+        output = outputs.pop(name, None)
+        if output is not None:
+            if transforms.pop(output)[0] == connector:
+                desired = None
+            output.release()
+
+    monitor = pyudev.Monitor.from_netlink(pyudev.Context())
+    monitor.filter_by("hidraw")
+    monitor.start()
+
+    with Display() as display:
+        registry = display.get_registry()
+        registry.dispatcher["global"] = output_added
+        registry.dispatcher["global_remove"] = output_removed
+        display.roundtrip()
+        display.roundtrip()
+        wayland_fd = display.get_fd()
+
+        while True:
+            pending = desired is not None and desired != applied and os.path.exists(KEYBOARD)
+            if pending and os.access(KEYBOARD, os.R_OK | os.W_OK):
+                try:
+                    response = subprocess.run(
+                        ["/usr/local/bin/pibrick-kbd", "--quiet", "trackpad-rotation", str(desired)],
+                        check=True, capture_output=True, text=True, timeout=4,
+                    )
+                    if response.stdout.strip() != str(desired):
+                        raise RuntimeError("keyboard reported a different rotation")
+                except (subprocess.SubprocessError, OSError, RuntimeError) as error:
+                    if not reported_failure:
+                        print(f"Could not set trackpad rotation: {error}", file=sys.stderr, flush=True)
+                        reported_failure = True
+                else:
+                    applied = desired
+                    reported_failure = False
+                    print(f"{connector}: trackpad rotation set to {applied * 90} degrees", flush=True)
+
+            display.flush()
+            readable, _, _ = select.select(
+                [wayland_fd, monitor.fileno()], [], [], 2 if pending and desired != applied else None,
+            )
+            if wayland_fd in readable:
+                display.dispatch(block=True)
+            if monitor.fileno() in readable:
+                device = monitor.poll(timeout=0)
+                if device is not None and KEYBOARD in device.device_links:
+                    applied = None
+
+
+if __name__ == "__main__":
+    follow_output(sys.argv[1])

@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Live PiBrick battery and charger readings from Linux power_supply."""
+
+import argparse
+import curses
+import datetime
+import errno
+import math
+import re
+import sys
+import time
+from itertools import zip_longest
+from pathlib import Path
+
+
+SUPPLIES = Path("/sys/class/power_supply")
+I2C_DEVICES = Path("/sys/bus/i2c/devices")
+
+# Display order, label, sysfs divisor, and display unit.
+BATTERY_FIELDS = {
+    "status": ("Status", 1, ""),
+    "capacity": ("State of charge", 1, "%"),
+    "voltage_now": ("Battery voltage", 1_000_000, "V"),
+    "current_now": ("Battery current", 1_000_000, "A"),
+    "capacity_level": ("Capacity level", 1, ""),
+    "charge_now": ("Remaining charge", 1_000_000, "Ah"),
+    "charge_full_design": ("Design charge", 1_000_000, "Ah"),
+    "energy_now": ("Remaining energy", 1_000_000, "Wh"),
+    "energy_full": ("Full energy", 1_000_000, "Wh"),
+    "energy_full_design": ("Design energy", 1_000_000, "Wh"),
+    "time_to_empty_now": ("Time to empty", 1, "s"),
+    "time_to_full_now": ("Time to full", 1, "s"),
+    "temp": ("Temperature", 10, "°C"),
+    "present": ("Present", 1, ""),
+    "technology": ("Chemistry", 1, ""),
+    "type": ("Supply type", 1, ""),
+    "model_name": ("Model", 1, ""),
+    "manufacturer": ("Manufacturer", 1, ""),
+}
+CHARGER_FIELDS = {
+    "status": ("Status", 1, ""),
+    "online": ("Input online", 1, ""),
+    "health": ("Health", 1, ""),
+    "charge_type": ("Charge type", 1, ""),
+    "voltage_now": ("Battery voltage", 1_000_000, "V"),
+    "current_now": ("Charger current", 1_000_000, "A"),
+    "input_current_limit": ("Input current limit", 1_000_000, "A"),
+    "constant_charge_current": ("Charge current set", 1_000_000, "A"),
+    "constant_charge_current_max": ("Max charge current", 1_000_000, "A"),
+    "constant_charge_voltage": ("Charge voltage set", 1_000_000, "V"),
+    "constant_charge_voltage_max": ("Max charge voltage", 1_000_000, "V"),
+    "precharge_current": ("Precharge current", 1_000_000, "A"),
+    "charge_term_current": ("Termination current", 1_000_000, "A"),
+    "temp": ("Temperature", 10, "°C"),
+    "scope": ("Scope", 1, ""),
+    "type": ("Supply type", 1, ""),
+    "model_name": ("Model", 1, ""),
+    "manufacturer": ("Manufacturer", 1, ""),
+}
+
+
+def read_properties(supply):
+    if supply is None:
+        return {}
+    try:
+        entries = sorted(supply.iterdir())
+    except FileNotFoundError:
+        return {}
+    values = {}
+    for entry in entries:
+        if entry.name == "uevent" or not entry.is_file():
+            continue
+        try:
+            values[entry.name] = entry.read_text().strip()
+        except OSError as error:
+            if error.errno in (errno.EINVAL, errno.EOPNOTSUPP):
+                values[entry.name] = "Unsupported"
+            elif error.errno in (errno.ENODATA, errno.ENODEV, errno.ENOENT):
+                values[entry.name] = "Unavailable"
+            else:
+                values[entry.name] = "Read error"
+    return values
+
+
+def format_value(key, value, divisor, unit):
+    try:
+        number = int(value)
+    except ValueError:
+        return value
+    if key in ("online", "present"):
+        return {0: "No", 1: "Yes"}.get(number, value)
+    if unit == "s":
+        return str(datetime.timedelta(seconds=number))
+    if unit == "%":
+        return f"{number}%"
+    if unit:
+        decimals = 1 if unit == "°C" else 3
+        return f"{number / divisor:.{decimals}f} {unit}"
+    return value
+
+
+def supply_rows(title, values, fields, estimated_current=False):
+    rows = [title]
+    if not values:
+        return rows + ["  No power-supply readings"]
+    for key in dict.fromkeys([*fields, *values]):
+        if key not in values:
+            continue
+        label, divisor, unit = fields.get(key, (key, 1, ""))
+        if key == "current_now" and estimated_current:
+            label = "Current (estimated)"
+        rows.append(f" {label:<19} {format_value(key, values[key], divisor, unit)}")
+    return rows
+
+
+def read_snapshot():
+    charger = next(iter(sorted(SUPPLIES.glob("bq25890-charger-*"))), None)
+    battery = read_properties(SUPPLIES / "battery")
+    charger_values = read_properties(charger)
+    provider = battery.get("model_name", "").upper()
+    bus = "1"
+    if charger is not None:
+        match = re.fullmatch(r"(\d+)-006a", (charger / "device").resolve().name)
+        if match:
+            bus = match[1]
+
+    devices = [f"I²C bus {bus}"]
+    for address, model, role in (
+        ("0036", "MAX17048", "fuel gauge"),
+        ("0070", "STC3115", "fuel gauge"),
+        ("006a", "BQ25895", "charger"),
+    ):
+        node = I2C_DEVICES / f"{bus}-{address}"
+        if not node.is_dir():
+            state = "Not enumerated"
+        elif not (node / "driver").is_symlink():
+            state = "Driver unbound"
+        elif provider == model:
+            state = "Active battery gauge"
+        elif role == "charger" and provider == "PIBRICK BATTERY":
+            state = "Charger and battery estimator"
+        else:
+            state = "Driver bound"
+        devices.append(f"  0x{address[-2:]}  {model:<8}  {role:<10}  {state}")
+
+    battery_rows = supply_rows(
+        "Battery  [battery]", battery, BATTERY_FIELDS,
+        estimated_current=provider in ("MAX17048", "PIBRICK BATTERY"),
+    )
+    charger_rows = supply_rows(
+        f"Charger  [{charger.name}]" if charger else "Charger",
+        charger_values, CHARGER_FIELDS,
+        estimated_current=charger_values.get("online") == "0",
+    )
+    return devices, battery_rows, charger_rows
+
+
+def layout(snapshot, width):
+    devices, battery, charger = snapshot
+    left_width = max(map(len, battery)) + 3
+    if left_width + max(map(len, charger)) <= width:
+        supplies = [
+            f"{left:<{left_width}}{right}".rstrip()
+            for left, right in zip_longest(battery, charger, fillvalue="")
+        ]
+    else:
+        supplies = battery + [""] + charger
+    return devices + [""] + supplies
+
+
+def watch(screen, interval):
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass
+    offset = 0
+    deadline = 0
+    while True:
+        if time.monotonic() >= deadline:
+            snapshot = read_snapshot()
+            updated = time.strftime("%H:%M:%S")
+            deadline = time.monotonic() + interval
+
+        height, width = screen.getmaxyx()
+        rows = layout(snapshot, width - 1)
+        page_size = max(1, height - 2)
+        last_offset = max(0, len(rows) - page_size)
+        offset = min(max(0, offset), last_offset)
+        footer = "Q quit"
+        if last_offset:
+            footer += f"   ↑/↓ scroll   {offset + 1}–{offset + page_size}/{len(rows)}"
+        screen.erase()
+        screen.addnstr(0, 0, f"PiBrick Power   {updated}", width - 1, curses.A_BOLD)
+        if height >= 3:
+            for row, line in enumerate(rows[offset:offset + page_size], 1):
+                screen.addnstr(row, 0, line, width - 1)
+        if height >= 2:
+            screen.addnstr(height - 1, 0, footer, width - 1, curses.A_REVERSE)
+        screen.refresh()
+        remaining = max(0, min(1, deadline - time.monotonic()))
+        screen.timeout(math.ceil(remaining * 1000))
+        key = screen.getch()
+        if key in (ord("q"), ord("Q")):
+            return
+        if key == curses.KEY_DOWN:
+            offset += 1
+        elif key == curses.KEY_UP:
+            offset -= 1
+        elif key == curses.KEY_NPAGE:
+            offset += page_size
+        elif key == curses.KEY_PPAGE:
+            offset -= page_size
+        elif key == curses.KEY_HOME:
+            offset = 0
+        elif key == curses.KEY_END:
+            offset = last_offset
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--once", action="store_true", help="print one snapshot and exit")
+    parser.add_argument("--interval", type=float, default=2, metavar="SECONDS",
+                        help="seconds between refreshes (default: 2)")
+    args = parser.parse_args()
+    if not math.isfinite(args.interval) or args.interval <= 0:
+        parser.error("--interval must be a positive, finite number")
+
+    if args.once or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("PiBrick Power")
+        print("\n".join(layout(read_snapshot(), 0)))
+        return 0
+    try:
+        curses.wrapper(watch, args.interval)
+    except KeyboardInterrupt:
+        return 130
+    except curses.error as error:
+        parser.exit(1, f"Terminal display unavailable ({error}). Use --once for a snapshot.\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
