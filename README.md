@@ -1084,8 +1084,9 @@ allow `net.hadess.SensorProxy.claim-sensor` for that desktop account's user
 manager in polkit.
 
 The optional `pibrick-trackpad-rotation.service` user service reads the
-actual Wayland display rotation and applies it with `pibrick-kbd`. It
-uses `python3-pywayland` and `python3-pyudev`. Install
+actual Wayland display rotation and applies it with `pibrick-kbd`. On
+Arch Linux ARM, install `python-pywayland` and `python-pyudev`. On
+Debian, install `python3-pywayland` and `python3-pyudev`. Install
 `70-pibrick-keyboard-control.rules` in `/etc/udev/rules.d/` and
 `pibrick-trackpad-follow-output` as an executable in `/usr/local/bin/`.
 Install the unit in `~/.config/systemd/user/` and enable it with
@@ -1426,10 +1427,12 @@ panel-pibrick
 pibrick-battery
 pibrick-charger
 pibrick-stc3115
+pibrick-mma8451
 hyn_ts
 ```
 
 DKMS allows the modules to be automatically rebuilt when a compatible kernel is installed or updated.
+For a DKMS-only install, run `bash dkms/dkms-install.sh` from the repository root.
 
 Check DKMS status with:
 
@@ -1441,11 +1444,17 @@ dkms status
 
 # Installation
 
-The recommended installation method is:
+On Arch Linux ARM, use a 64-bit Raspberry Pi kernel (`linux-rpi` or
+`linux-rpi-16k`) and mount the Raspberry Pi firmware partition at
+`/boot`. The installer uses `pacman` to install missing build dependencies
+and selects the headers for the running kernel. Bring Arch Linux ARM up
+to date with `sudo pacman -Syu` before installing, and reboot first if that
+upgrades the kernel.
 
 ```bash
-cd pibrick-drivers/scripts
-bash ./install.sh
+git clone --branch arch https://github.com/Jcwscience/pibrick-drivers.git
+cd pibrick-drivers
+bash install.sh
 ```
 
 The installer performs the complete piBrick setup.
@@ -1460,13 +1469,11 @@ It installs:
 6. `pibrick-kbd.sh`
 7. Required userspace components
 
-The Device Tree configuration is added to:
-
-```text
-/boot/firmware/config.txt
-```
-
-using:
+The installer adds the configuration below to `/boot/config.txt` on
+Arch Linux ARM and `/boot/firmware/config.txt` on Raspberry Pi OS. The
+compiled overlay goes into the sibling `overlays/` directory. If the
+firmware is mounted elsewhere, pass the same boot directory to both
+scripts with `BOOT_FIRMWARE_DIR=/path/to/boot`.
 
 ```ini
 # piBrick CM5 drivers
@@ -1488,8 +1495,8 @@ sudo reboot
 Remove the piBrick driver stack with:
 
 ```bash
-cd pibrick-drivers/scripts
-sudo ./uninstall.sh
+cd pibrick-drivers
+sudo bash scripts/uninstall.sh
 ```
 
 The uninstaller removes:
@@ -1501,11 +1508,7 @@ The uninstaller removes:
 * Button action scripts
 * piBrick keyboard userspace component
 
-The piBrick overlay configuration is removed from:
-
-```text
-/boot/firmware/config.txt
-```
+The uninstaller removes the overlay entry from the firmware's `config.txt`.
 
 ---
 
@@ -1587,8 +1590,10 @@ lsmod | grep -E 'panel_pibrick|pibrick_battery|pibrick_charger|hyn_ts'
 
 ```bash
 grep -E '^[[:space:]]*dtoverlay=pibrick' \
-    /boot/firmware/config.txt
+    /boot/config.txt
 ```
+
+On Raspberry Pi OS, use `/boot/firmware/config.txt`.
 
 ---
 

@@ -7,13 +7,17 @@
 set -euo pipefail
 
 PACKAGE_NAME="pibrick-drivers"
-PACKAGE_VERSION="1.0.0"
+PACKAGE_VERSION="${PIBRICK_DKMS_VERSION:-1.0.0}"
 
 DKMS_NAME="${PACKAGE_NAME}"
 DKMS_VERSION="${PACKAGE_VERSION}"
 DKMS_SOURCE_DIR="/usr/src/${DKMS_NAME}-${DKMS_VERSION}"
 
-BOOT_FIRMWARE_DIR="/boot/firmware"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/platform.sh
+source "${SCRIPT_DIR}/platform.sh"
+
+BOOT_FIRMWARE_DIR="${BOOT_FIRMWARE_DIR:-$(default_boot_dir)}"
 OVERLAY_FILE="${BOOT_FIRMWARE_DIR}/overlays/pibrick.dtbo"
 
 
@@ -39,6 +43,12 @@ info()
     echo "==> $*"
 }
 
+die()
+{
+    echo "Error: $*" >&2
+    exit 1
+}
+
 stop_button_service()
 {
     info "Stopping pibrick-button-service"
@@ -62,6 +72,7 @@ remove_userspace()
     info "Removing piBrick userspace applications"
 
     rm -f \
+        /usr/sbin/pibrick-button-service \
         /usr/local/bin/pibrick-button-service \
         /usr/local/bin/pibrick-kbd
 }
@@ -71,8 +82,9 @@ remove_dkms()
     info "Removing piBrick DKMS modules"
 
     if command -v dkms >/dev/null 2>&1; then
-        if dkms status "${DKMS_NAME}/${DKMS_VERSION}" \
-            2>/dev/null | grep -q "${DKMS_NAME}/${DKMS_VERSION}"
+        if [[ -d "/var/lib/dkms/${DKMS_NAME}/${DKMS_VERSION}" ]] ||
+            dkms status "${DKMS_NAME}/${DKMS_VERSION}" \
+            2>/dev/null | grep -F "${DKMS_NAME}/${DKMS_VERSION}" >/dev/null
         then
             dkms remove \
                 "${DKMS_NAME}/${DKMS_VERSION}" \
@@ -86,7 +98,7 @@ remove_dkms()
 
     rm -rf "${DKMS_SOURCE_DIR}"
 
-    depmod -a
+    depmod -a "$(uname -r)"
 }
 
 restore_pibrick_splash() {
@@ -104,17 +116,7 @@ restore_pibrick_splash() {
 
     echo "Restored original Raspberry Pi OS splash."
 
-    # Rebuild the initramfs only when one is configured/present.
-    if compgen -G "/boot/firmware/initramfs*" >/dev/null ||
-       compgen -G "/boot/initramfs*" >/dev/null; then
-        if command -v plymouth-set-default-theme >/dev/null 2>&1; then
-            plymouth-set-default-theme --rebuild-initrd pix ||
-                echo "WARNING: Could not rebuild initramfs automatically."
-        elif command -v update-initramfs >/dev/null 2>&1; then
-            update-initramfs -u -k all ||
-                echo "WARNING: Could not rebuild initramfs automatically."
-        fi
-    fi
+    rebuild_splash_initramfs
 }
 
 remove_dtbo()
@@ -145,7 +147,7 @@ show_status()
 
 remove_config()
 {
-    local config="${1:-/boot/firmware/config.txt}"
+    local config="$1"
 
     if [[ ! -f "${config}" ]]; then
         info "config.txt not found, skipping overlay configuration removal"
@@ -158,6 +160,7 @@ remove_config()
         local normalized
         normalized="$(mktemp)"
         if ! awk '
+            /^[[:space:]]*\[/ { pibrick = 0 }
             /^[[:space:]]*dtoverlay[[:space:]]*=/ {
                 pibrick = ($0 ~ /^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*pibrick([,[:space:]]|$)/)
                 if (pibrick)
@@ -182,39 +185,10 @@ remove_config()
     fi
 }
 
-remove_existing_dkms()
-{
-    info "Checking existing DKMS registration"
-
-    if ! command -v dkms >/dev/null 2>&1; then
-        return 0
-    fi
-
-    local dkms_conf="/var/lib/dkms/${DKMS_NAME}/${DKMS_VERSION}/source"
-    local dkms_source="/usr/src/${DKMS_NAME}-${DKMS_VERSION}"
-
-    # Remove existing DKMS registration, regardless of status.
-    if [[ -e "${dkms_conf}" ]] || \
-       dkms status "${DKMS_NAME}/${DKMS_VERSION}" 2>/dev/null |
-       grep -q "${DKMS_NAME}/${DKMS_VERSION}"; then
-
-        info "Removing existing DKMS registration"
-
-        dkms remove \
-            "${DKMS_NAME}/${DKMS_VERSION}" \
-            --all || true
-    fi
-
-    # Clean up stale DKMS registration directory if it remains.
-    if [[ -d "/var/lib/dkms/${DKMS_NAME}/${DKMS_VERSION}" ]]; then
-        rm -rf "/var/lib/dkms/${DKMS_NAME}/${DKMS_VERSION}"
-    fi
-
-    # Remove old source tree before copying updated sources.
-    rm -rf "${dkms_source}"
-}
 main()
 {
+    [[ "${PACKAGE_VERSION}" =~ ^[[:alnum:]][[:alnum:].+_-]*$ ]] ||
+        die "Invalid DKMS version: ${PACKAGE_VERSION}"
     require_root "$@"
 
     echo "========================================"
@@ -226,16 +200,13 @@ main()
     stop_button_service
     remove_userspace
     remove_dkms
+    remove_config "${BOOT_FIRMWARE_DIR}/config.txt"
     remove_dtbo
     rm -f /etc/udev/rules.d/61-pibrick-accelerometer.rules
-    remove_config
 
     restore_pibrick_splash
 
-    rm -rf "${DKMS_SOURCE_DIR}"
-    depmod -a
     rm -f /etc/modules-load.d/pibrick.conf
-    remove_existing_dkms
 
     show_status
 }

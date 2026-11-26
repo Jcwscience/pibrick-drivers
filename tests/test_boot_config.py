@@ -58,6 +58,17 @@ class BootConfigTests(unittest.TestCase):
                 run_function("uninstall.sh", "remove_config", config)
                 self.assertEqual(config.read_text(), "[all]\n" + other)
 
+    def test_install_after_arch_board_filter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.txt"
+            config.write_text("[cm4]\notg_mode=1\n")
+            for _ in range(2):
+                run_function("install.sh", "install_config", config)
+            self.assertEqual(
+                config.read_text(),
+                "[cm4]\notg_mode=1\n\n[all]\n\n# piBrick CM5 drivers\ndtoverlay=pibrick\n",
+            )
+
     def test_documented_boot_entries_fit_firmware_limit(self):
         for name in ["README.md", "examples/config.txt"]:
             for line in (ROOT / name).read_text().splitlines():

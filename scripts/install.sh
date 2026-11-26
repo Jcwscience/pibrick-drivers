@@ -7,19 +7,22 @@
 set -euo pipefail
 
 PACKAGE_NAME="pibrick-drivers"
-PACKAGE_VERSION="1.0.0"
+PACKAGE_VERSION="${PIBRICK_DKMS_VERSION:-1.0.0}"
 DKMS_NAME="${PACKAGE_NAME}"
 DKMS_VERSION="${PACKAGE_VERSION}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=scripts/platform.sh
+source "${SCRIPT_DIR}/platform.sh"
 
 KERNEL_VERSION="$(uname -r)"
-KERNEL_BUILD_DIR="/lib/modules/${KERNEL_VERSION}/build"
+KERNEL_MODULE_DIR="/lib/modules/${KERNEL_VERSION}"
+KERNEL_BUILD_DIR="${KERNEL_MODULE_DIR}/build"
 
 DKMS_SOURCE_DIR="/usr/src/${DKMS_NAME}-${DKMS_VERSION}"
 
-BOOT_FIRMWARE_DIR="/boot/firmware"
+BOOT_FIRMWARE_DIR="${BOOT_FIRMWARE_DIR:-$(default_boot_dir)}"
 OVERLAY_DIR="${BOOT_FIRMWARE_DIR}/overlays"
 OVERLAY_FILE="${OVERLAY_DIR}/pibrick.dtbo"
 
@@ -67,17 +70,54 @@ check_source_tree()
         "${ROOT_DIR}/dkms/dkms.conf" \
         "${ROOT_DIR}/panel" \
         "${ROOT_DIR}/power" \
-        "${ROOT_DIR}/touch/hyn_ts" \
-        "${ROOT_DIR}/dts/pibrick.dts"
+        "${ROOT_DIR}/accel" \
+        "${ROOT_DIR}/touch/hyn_ts/Makefile"
     do
         [[ -e "${required}" ]] || \
             die "Required source is missing: ${required}"
     done
 }
 
+install_arch_dependencies()
+{
+    [[ "$(uname -m)" == aarch64 ]] ||
+        die "Arch Linux installation requires an AArch64 kernel."
+    command -v pacman >/dev/null 2>&1 ||
+        die "pacman is required on Arch Linux."
+
+    local -a packages=(dkms gcc make)
+    local kernel_package
+    if [[ "$1" == full ]]; then
+        packages+=(dtc)
+    fi
+
+    if [[ ! -f "${KERNEL_BUILD_DIR}/Makefile" ]]; then
+        [[ -r "${KERNEL_MODULE_DIR}/pkgbase" ]] ||
+            die "Running kernel ${KERNEL_VERSION} is missing its package metadata. Reboot into the installed Raspberry Pi kernel and rerun the installer."
+        kernel_package="$(<"${KERNEL_MODULE_DIR}/pkgbase")"
+        case "${kernel_package}" in
+            linux-rpi|linux-rpi-16k)
+                packages+=("${kernel_package}-headers")
+                ;;
+            *)
+                die "Install headers for the running kernel (${kernel_package}, ${KERNEL_VERSION}) and rerun the installer."
+                ;;
+        esac
+    fi
+
+    if ! pacman -Qq "${packages[@]}" >/dev/null 2>&1; then
+        pacman -S --needed "${packages[@]}"
+    fi
+}
+
 install_dependencies()
 {
     info "Installing build dependencies"
+
+    if is_arch; then
+        install_arch_dependencies "$1"
+        return
+    fi
 
     export DEBIAN_FRONTEND=noninteractive
 
@@ -103,17 +143,24 @@ install_dependencies()
             ;;
     esac
 
-    apt-get install -y \
-        dkms \
-        build-essential \
-        device-tree-compiler \
-        "${header_package}"
+    local -a packages=(dkms build-essential)
+    if [[ "$1" == full ]]; then
+        packages+=(device-tree-compiler)
+    fi
+    if [[ ! -f "${KERNEL_BUILD_DIR}/Makefile" ]]; then
+        packages+=("${header_package}")
+    fi
+    apt-get install -y "${packages[@]}"
 }
 
 check_kernel_build_tree()
 {
-    [[ -d "${KERNEL_BUILD_DIR}" ]] || \
+    if [[ ! -f "${KERNEL_BUILD_DIR}/Makefile" ]]; then
+        if is_arch; then
+            die "Headers for the running kernel ${KERNEL_VERSION} are unavailable. If the kernel was upgraded, reboot into the installed kernel before retrying."
+        fi
         die "Kernel build directory not found: ${KERNEL_BUILD_DIR}"
+    fi
 }
 
 build_dtbo()
@@ -150,6 +197,8 @@ prepare_dkms_source()
     install -m 0644 \
         "${ROOT_DIR}/dkms/dkms.conf" \
         "${DKMS_SOURCE_DIR}/dkms.conf"
+    sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"${DKMS_VERSION}\"/" \
+        "${DKMS_SOURCE_DIR}/dkms.conf"
 
     cp -a \
         "${ROOT_DIR}/panel" \
@@ -179,14 +228,15 @@ remove_existing_dkms()
         return
     fi
 
-    if dkms status "${DKMS_NAME}/${DKMS_VERSION}" \
-        2>/dev/null | grep -q "${DKMS_NAME}/${DKMS_VERSION}"
+    if [[ -d "/var/lib/dkms/${DKMS_NAME}/${DKMS_VERSION}" ]] ||
+        dkms status "${DKMS_NAME}/${DKMS_VERSION}" \
+        2>/dev/null | grep -F "${DKMS_NAME}/${DKMS_VERSION}" >/dev/null
     then
         info "Removing existing DKMS registration"
 
         dkms remove \
             "${DKMS_NAME}/${DKMS_VERSION}" \
-            --all || true
+            --all
     fi
 }
 
@@ -223,20 +273,6 @@ install_dtbo()
         "${OVERLAY_FILE}"
 }
 
-build_application()
-{
-    local app_dir="$1"
-
-    [[ -d "${app_dir}" ]] || return 0
-
-    [[ -f "${app_dir}/Makefile" ]] || \
-        die "Makefile not found: ${app_dir}/Makefile"
-
-    info "Building $(basename "${app_dir}")"
-
-    make -C "${app_dir}"
-}
-
 install_button_service()
 {
     [[ -d "${BUTTON_APP_DIR}" ]] || return 0
@@ -263,8 +299,7 @@ install_pibrick_splash() {
     fi
 
     if [[ ! -f "$PLYMOUTH_SPLASH" ]]; then
-        echo "WARNING: Raspberry Pi OS splash not found: $PLYMOUTH_SPLASH"
-        echo "Skipping splash installation."
+        echo "Skipping Plymouth splash installation because the pix theme is unavailable."
         return 0
     fi
 
@@ -290,17 +325,7 @@ install_pibrick_splash() {
     touch "$SPLASH_MARKER"
     echo "Installed piBrick Plymouth splash."
 
-    # Rebuild the initramfs only when one is configured/present.
-    if compgen -G "/boot/firmware/initramfs*" >/dev/null ||
-       compgen -G "/boot/initramfs*" >/dev/null; then
-        if command -v plymouth-set-default-theme >/dev/null 2>&1; then
-            plymouth-set-default-theme --rebuild-initrd pix ||
-                echo "WARNING: Could not rebuild initramfs automatically."
-        elif command -v update-initramfs >/dev/null 2>&1; then
-            update-initramfs -u -k all ||
-                echo "WARNING: Could not rebuild initramfs automatically."
-        fi
-    fi
+    rebuild_splash_initramfs
 }
 
 show_status()
@@ -322,7 +347,7 @@ show_status()
         pibrick-mma8451 \
         hyn_ts
     do
-        if modinfo "${module}" >/dev/null 2>&1; then
+        if modinfo -k "${KERNEL_VERSION}" "${module}" >/dev/null 2>&1; then
             echo "  ${module}: installed"
         else
             echo "  ${module}: NOT FOUND"
@@ -342,7 +367,7 @@ show_status()
     echo "Userspace:"
     echo "  pibrick-button-service:"
     if systemctl list-unit-files --type=service 2>/dev/null |
-        grep -q '^pibrick-button-service\.service'; then
+        grep '^pibrick-button-service\.service' >/dev/null; then
 
         if systemctl is-active --quiet pibrick-button-service.service; then
             echo "    installed, running"
@@ -366,7 +391,7 @@ show_status()
 
 install_config()
 {
-    local config="${1:-/boot/firmware/config.txt}"
+    local config="$1"
     local normalized
 
     # Firmware truncates config.txt entries after 98 characters. Keep overlay
@@ -390,42 +415,15 @@ install_config()
 
     if ! grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*pibrick([,[:space:]]|$)' "$config"; then
         info "Enabling piBrick device-tree overlay"
+        local last_section
+        last_section="$(awk '/^[[:space:]]*\[/ { section = $0 } END { print section }' "$config")"
+        if [[ -n "$last_section" && ! "$last_section" =~ ^[[:space:]]*\[all\][[:space:]]*$ ]]; then
+            printf '\n[all]\n' >> "$config"
+        fi
         printf '\n# piBrick CM5 drivers\ndtoverlay=pibrick\n' >> "$config"
     else
         info "piBrick device-tree overlay already enabled"
     fi
-}
-
-remove_existing_dkms()
-{
-    info "Checking existing DKMS registration"
-
-    if ! command -v dkms >/dev/null 2>&1; then
-        return 0
-    fi
-
-    local dkms_conf="/var/lib/dkms/${DKMS_NAME}/${DKMS_VERSION}/source"
-    local dkms_source="/usr/src/${DKMS_NAME}-${DKMS_VERSION}"
-
-    # Remove existing DKMS registration, regardless of status.
-    if [[ -e "${dkms_conf}" ]] || \
-       dkms status "${DKMS_NAME}/${DKMS_VERSION}" 2>/dev/null |
-       grep -q "${DKMS_NAME}/${DKMS_VERSION}"; then
-
-        info "Removing existing DKMS registration"
-
-        dkms remove \
-            "${DKMS_NAME}/${DKMS_VERSION}" \
-            --all || true
-    fi
-
-    # Clean up stale DKMS registration directory if it remains.
-    if [[ -d "/var/lib/dkms/${DKMS_NAME}/${DKMS_VERSION}" ]]; then
-        rm -rf "/var/lib/dkms/${DKMS_NAME}/${DKMS_VERSION}"
-    fi
-
-    # Remove old source tree before copying updated sources.
-    rm -rf "${dkms_source}"
 }
 
 install_module_autoload()
@@ -444,6 +442,16 @@ EOF
 
 main()
 {
+    local mode=full
+    case "${1:-}" in
+        "") ;;
+        --modules-only) mode=modules ;;
+        *) die "Usage: bash scripts/install.sh [--modules-only]" ;;
+    esac
+    [[ $# -le 1 ]] || die "Usage: bash scripts/install.sh [--modules-only]"
+    [[ "${PACKAGE_VERSION}" =~ ^[[:alnum:]][[:alnum:].+_-]*$ ]] ||
+        die "Invalid DKMS version: ${PACKAGE_VERSION}"
+
     require_root "$@"
 
     echo "========================================"
@@ -455,15 +463,24 @@ main()
     echo "Source  : ${ROOT_DIR}"
 
     check_source_tree
-    install_dependencies
+    if [[ "$mode" == full ]]; then
+        [[ -f "${BOOT_FIRMWARE_DIR}/config.txt" ]] ||
+            die "Firmware config not found at ${BOOT_FIRMWARE_DIR}/config.txt. Mount the Raspberry Pi boot partition before continuing."
+    fi
+    install_dependencies "$mode"
     check_kernel_build_tree
+
+    if [[ "$mode" == modules ]]; then
+        install_dkms
+        dkms status "${DKMS_NAME}/${DKMS_VERSION}"
+        return
+    fi
 
     # The root Makefile builds the DTBO.
     # Kernel modules are built only once by DKMS.
     build_dtbo
 
     # DKMS owns kernel module compilation and installation.
-    remove_existing_dkms
     install_dkms
     install_module_autoload
 
@@ -472,7 +489,7 @@ main()
     install -D -m 0644 \
         "${ROOT_DIR}/accel/61-pibrick-accelerometer.rules" \
         /etc/udev/rules.d/61-pibrick-accelerometer.rules
-    install_config
+    install_config "${BOOT_FIRMWARE_DIR}/config.txt"
 
     # Userspace applications are built independently.
     install_button_service
